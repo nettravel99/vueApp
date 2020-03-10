@@ -59,6 +59,11 @@
         v-model="text"
         label = "Location"
       /> -->
+        <q-form
+      @submit="onSubmit"
+      @reset="onReset"
+      class="q-gutter-md"
+    >
       <q-input
       :dense=field.denseSw
       v-for="field in fields"
@@ -71,11 +76,16 @@
       :type=field.type
       >
       </q-input>
-       <div v-for='(x,key) in formdata' :key=key>
+       <!-- <div v-for='(x,key) in formdata' :key=key>
 
          data = {{x}}
          idx = {{key}}
-  </div>
+  </div> -->
+       <div>
+        <q-btn label="Submit" type="submit" color="primary"/>
+        <q-btn label="Reset" type="reset" color="primary" flat class="q-ml-sm" />
+      </div>
+  </q-form>
     </div>
   </div>
       </div>
@@ -103,28 +113,28 @@ export default {
       modality: null,
       formdata: {},
       temp: {},
-      exportdata: {},
+      exportData: { formName: 'REFPORTAL' },
       fields: [
-        {
-          label: 'First',
-          data: 'data[1]',
-          filledSw: true,
-          key: 'first',
-          color: 'red',
-          denseSw: false,
-          placeholder: 'place1xxxxx',
-          type: 'text'
-        },
-        {
-          label: 'Second',
-          data: 'data[2]',
-          filledSw: false,
-          key: 'second',
-          color: 'blue',
-          densSw: false,
-          placeholder: 'places2yyyyy',
-          type: 'text'
-        }
+        // {
+        //   label: 'First',
+        //   data: 'data[1]',
+        //   filledSw: true,
+        //   key: 'first',
+        //   color: 'red',
+        //   denseSw: false,
+        //   placeholder: 'place1xxxxx',
+        //   type: 'text'
+        // },
+        // {
+        //   label: 'Second',
+        //   data: 'data[2]',
+        //   filledSw: false,
+        //   key: 'second',
+        //   color: 'blue',
+        //   densSw: false,
+        //   placeholder: 'places2yyyyy',
+        //   type: 'text'
+        // }
       ],
       essentialLinks: [
         {
@@ -179,11 +189,11 @@ export default {
 
   methods: {
     async getCount () {
-      console.log('database called')
-      const data = await this.$M('count^TKAAforms', this.exportData)
+      console.log('database called with dataX ', this.exportData)
+      const data = await this.$M('getForm^TKAAforms', this.exportData)
 
-      console.log('Call count^ChartG:', data)
-
+      console.log('Call getForm^TKAAforms:', data)
+      this.fields = { ...data.data.result.FORMS.REFPORTAL.FIELDS }
       // this.temp = data.result.dashboards
 
       // this.NumberOfCharts = data.result.count
@@ -198,7 +208,21 @@ export default {
     //     this.headerClass[i] = data.result.header[i]
     //   }
     // }
-    }
-  }
+    },
+    async onSubmit () {
+      alert('submit called')
+      var json = JSON.stringify(this.formdata)
+      const data = await this.$M('saveForm^TKAAforms', json)
+      alert(data)
+    },
+    onReset () {
+      alert('Reset called')
+      var temp = Object.keys(this.formdata)
+      for (var i = 0; i < temp.length; i++) {
+        console.log('form data loop: ', this.formdata[temp[i]])
+        this.formdata[temp[i]] = null
+      }
+      console.log('form data', this.formdata)
+    } }
 }
 </script>

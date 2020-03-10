@@ -1,0 +1,2667 @@
+<template>
+  <div>
+    <el-row>
+      <el-col :span="24">
+        <AiAccountSelector
+          v-model="accountSelector"
+          :extra-title="title"
+          icon="ai"
+          @reload="handleAccountChange"
+          @reloadZero="handleZeroLoad"
+        />
+      </el-col>
+    </el-row>
+    <el-row>
+      <el-col :span="24">
+        <el-form v-if="selectedAccount" :inline="true" :model="setsForm" size="mini">
+          <el-button type="warning" size="mini" icon="el-icon-star-off" circle @click="dialogSaveSet=true" />
+          <el-form-item>
+            <el-select
+              v-model="setsForm.selectedSet"
+              size="mini"
+              filterable
+              placeholder="Select a set"
+              @change="handleAccountChange"
+            >
+              <el-option v-for="item in aiSETS" :key="item" :label="item" :value="item" />
+            </el-select>
+          </el-form-item>
+          <el-form-item size="mini">
+            <el-checkbox-group v-model="aiOptions" @change="handleAccountChange">
+              <el-checkbox label="All Pat." value="0" />
+              <el-checkbox label="$0" value="1" />
+              <el-checkbox label="All dates" value="2" />
+            </el-checkbox-group>
+          </el-form-item>
+          <el-form-item size="mini">
+            <el-dialog title="Save Favorite Set" :visible.sync="dialogSaveSet">
+              <el-form :model="formSaveSet">
+                <el-form-item label="Favorite">
+                  <el-select
+                    v-model="formSaveSet.favorite"
+                    placeholder="Please select a favorite set number"
+                  >
+                    <el-option
+                      v-for="i in 10"
+                      :key="'favoriteSet'+i"
+                      :label="'Set No.'+i"
+                      :value="i"
+                    />
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="Set">
+                  <el-select v-model="formSaveSet.set" placeholder="Please select a set">
+                    <el-option v-for="item in aiSETS" :key="item" :label="item" :value="item" />
+                  </el-select>
+                </el-form-item>
+              </el-form>
+              <span slot="footer" class="dialog-footer">
+                <el-button @click="dialogSaveSet = false">Cancel</el-button>
+                <el-button type="primary" @click="favoriteSaveSet">Save</el-button>
+              </span>
+            </el-dialog>
+          </el-form-item>
+          <el-form-item size="mini">
+            <el-radio-group
+              v-model="setsForm.selectedSet"
+              size="mini"
+              @change="handleAccountChange"
+            >
+              <el-radio
+                v-for="(set,i) in favoriteSets.slice(0, 10)"
+                :key="'option'+i"
+                :label="set"
+              >{{ set }}&nbsp;</el-radio>
+            </el-radio-group>
+          </el-form-item>
+          <el-form-item size="mini" class="right-menu">
+            <AIFilter v-model="aiFilterString" class="right-menu-item" @reload="handleAccountChange" />
+            <AILinkedCharges v-model="aiLinkedChargesValue" class="right-menu-item" @reload="handleAccountChange" />
+            <AIColor v-model="aiColors" class="right-menu-item" @reload="handleAccountChange" />
+            <el-button type="primary" icon="el-icon-refresh" circle @click="handleAccountChange" />
+          </el-form-item>
+        </el-form>
+      </el-col>
+    </el-row>
+    <el-row>
+      <hot-table
+        v-if="selectedAccount"
+        :key="new Date().getTime()"
+        :data="aiDetails"
+        :col-headers="aiHeaders"
+        :row-headers="false"
+        :read-only="true"
+        :column-sorting="false"
+        :manual-column-freeze="true"
+        :context-menu="contextMenu"
+        :filters="true"
+        :dropdown-menu="['filter_by_condition','filter_operators','filter_by_condition2','filter_by_value','filter_action_bar']"
+        :col-widths="colWidths"
+        :columns="tableRenderer"
+        :height="'82vh'"
+        license-key="non-commercial-and-evaluation"
+        :manual-column-resize="true"
+        :manual-row-resize="true"
+      />
+    </el-row>
+  </div>
+</template>
+
+<script>
+import { M } from '@/api/index'
+import { HotTable } from '@handsontable/vue'
+import Handsontable from 'handsontable'
+import AIFilter from '@/components/AIFilter'
+import AILinkedCharges from '@/components/AILinkedCharges'
+import AiAccountSelector from '@/components/AIAccountSelector'
+import AIColor from '@/components/AIColor'
+import NProgress from 'nprogress'
+export default {
+  components: {
+    HotTable,
+    AIFilter,
+    AILinkedCharges,
+    AiAccountSelector,
+    AIColor
+  },
+  beforeRouteEnter(to, from, next) {
+    next(vm => {
+      const selected = vm.selectedAccount
+      if (!selected || selected === '') return
+      vm.selectedAccount = null
+      setTimeout(() => {
+        vm.selectedAccount = selected
+        vm.$forceUpdate()
+      }, 1000)
+    })
+  },
+  data() {
+    return {
+      accountSelector: {},
+      selectedAccount: '',
+      aiDetails: [],
+      aiHeaders: [],
+      colWidths: [],
+      title: [],
+      aiSETS: [],
+      setsForm: {
+        selectedSet: ''
+      },
+      aiLoading: false,
+      aiTotal: 99999,
+      aiCurrent: 0,
+      contextMenu: {
+        items: {
+          alignment: 'alignment',
+          // copy: "copy",
+          freeze_column: 'freeze_column',
+          unfreeze_column: 'unfreeze_column'
+        }
+      },
+      formSaveSet: {},
+      dialogSaveSet: false,
+      favoriteSets: [],
+      aiStatus: '',
+      aiFiler: '',
+      aiFilterString: ';0`2`0:`0:`0:  /  /    :`0:`0:`0:G`0`1`1`0``0``0`0',
+      aiLinkedChargesValue: {},
+      aiOptions: [],
+      aiColors: {}
+    }
+  },
+  computed: {
+    tableRenderer: {
+      get() {
+        const _vm = this
+        const columRenderer = {
+          renderer: function(
+            instance,
+            td,
+            row,
+            col,
+            prop,
+            value,
+            cellProperties
+          ) {
+            Handsontable.renderers.TextRenderer.apply(this, arguments)
+            // $(td).addClass("wordWrapClass");
+            const metatext = td.innerHTML
+            td.setAttribute('colSpan', 1)
+            const text = metatext.substring(0, metatext.length - 3)
+            const meta = metatext.substring(metatext.length - 3, metatext.length)
+            // instance.setDataAtCell(row,col,text);
+            td.className += (td.className ? ' ' : '') + 'wordWrapClass'
+            if (meta && meta[2] === '2') td.align = 'right'
+            if (meta && meta[2] === '1') td.align = 'center'
+            if (meta && meta[2] === '0') td.align = 'left'
+
+            if (meta && meta[0] === 'e') td.style.background = '#FFFFB4'
+            if (meta && meta[0] === 'K') td.style.background = '#0000C3'
+            if (meta && meta[0] === 'X') td.style.background = '#C0C0C0'
+            if (meta && meta[0] === 'f') td.style.background = '#B4E1FF'
+            if (meta && meta[0] === 'P') td.style.background = '#002054'
+            if (meta && meta[0] === 'H') td.style.background = '#FF8D59'
+            if (meta && meta[0] === 'i') td.style.background = '#E1FFFF'
+            if (meta && meta[0] === 'g') td.style.background = '#FFE1E1'
+            if (meta && meta[0] === 'h') td.style.background = '#E1FFE1'
+            if (meta && meta[1] === 'Z') td.style.color = 'black'
+            if (meta && meta[1] === 'U') td.style.color = 'black'
+            if (meta && meta[1] === 'R') td.style.color = 'red'
+            if (meta && meta[1] === 'W') td.style.color = 'white'
+            if (meta && meta[1] === 'A') td.style.color = 'green'
+            if (meta && meta[1] === 'K') td.style.color = '#0000C3'
+            if (meta && meta[1] === 'M') td.style.color = '#8d4e85'
+            if (meta && meta[0] === 'K' && text.length > 0) {
+              td.setAttribute('colSpan', _vm.aiHeaders.length)
+              td.align = 'center'
+            }
+
+            // if ((meta && meta[0] === "H") && (meta && meta[1] === "W") ) meta[1] = "Z"
+            if (meta === 'HW0' && text.length > 0) {
+              td.setAttribute('colSpan', _vm.aiHeaders.length)
+              td.align = 'center'
+            }
+            if ((meta === 'fU0' || meta === 'PW0') && text.length > 0) {
+              td.setAttribute('colSpan', _vm.aiHeaders.length)
+            }
+
+            if (_vm.aiColors && _vm.aiColors.charges && meta && meta[0] === 'e') {
+              td.style.background = _vm.aiColors.charges
+            }
+
+            if (_vm.aiColors && _vm.aiColors.messages && meta && meta[0] === 'W') {
+              td.style.background = _vm.aiColors.messages
+            }
+
+            if (_vm.aiColors && _vm.aiColors.payments && meta && meta[0] === 'X') {
+              td.style.background = _vm.aiColors.payments
+            }
+
+            /*
+            if (meta === 'WK0' && text.length > 10){
+              td.setAttribute("colSpan", 3);
+            }
+            */
+
+            td.title = text
+            td.innerHTML = meta
+            td.innerHTML = text
+
+            return cellProperties
+          }
+
+        }
+        const out = []
+        this.aiHeaders.map(() => out.push(columRenderer))
+        return out
+      }
+    }
+  },
+  async mounted() {
+    if (this.$route.query.K) {
+      this.selectedAccount = this.$route.query.K
+      await this.handleAccountChange()
+    }
+
+    const data = await M('getAISETS^MWAI')
+    if (data && data.aiSETS) {
+      this.aiSETS = data.aiSETS
+      if (data && data.favoriteSets) {
+        this.favoriteSets = data.favoriteSets
+      }
+      if (!this.favoriteSets) {
+        this.favoriteSets = this.aiSETS
+      }
+    }
+  },
+
+  methods: {
+    async handleZeroLoad() {
+      await this.handleAccountChange()
+      this.$forceUpdate()
+    },
+    async handleAccountChange() {
+      this.selectedAccount = this.accountSelector.selectedAccount
+
+      if (!this.selectedAccount) return
+      /*
+      const loading = this.$loading({
+        lock: true,
+        text: "Loading",
+        spinner: "el-icon-loading",
+        background: "rgba(0, 0, 0, 0.7)"
+      });*/
+
+      if (
+        !this.setsForm.selectedSet && this.accountSelector &&
+        this.accountSelector.selectedSet
+      ) {
+        this.setsForm.selectedSet = this.accountSelector.selectedSet
+      } else if (!this.setsForm.selectedSet) {
+        this.setsForm.selectedSet = this.aiSETS[0]
+      }
+
+      const aidata = await M('getAIDetails^MWAI', {
+        k: this.selectedAccount,
+        set: this.setsForm.selectedSet,
+        filter: this.aiFilterString,
+        LinkedAcc: this.aiLinkedChargesValue,
+        aiOptions: this.aiOptions
+      })
+      this.aiHeaders = []
+      this.aiDetails = []
+      this.aiCurrent = 0
+      this.aiTotal = 99999
+      if (aidata && aidata.data && aidata.data.headers) {
+        this.aiHeaders = aidata.data.headers
+      }
+      /*
+      if (aidata && aidata.data && aidata.data.details) {
+        this.aiDetails = [];
+        this.aiDetails = aidata.data.details;
+      }*/
+
+      if (aidata && aidata.data && aidata.data.aiTotal) {
+        this.aiTotal = aidata.data.aiTotal
+      }
+
+      if (aidata && aidata.data && aidata.data.colWidths) {
+        this.colWidths = []
+        this.colWidths = aidata.data.colWidths
+      }
+      if (aidata && aidata.data && aidata.data.title) {
+        this.title = aidata.data.title
+      }
+      if (aidata && aidata.data && aidata.data.colors) {
+        this.aiColors = aidata.data.colors
+      }
+
+      // loading.close();
+
+      setTimeout(async() => {
+        await this.getAiDetails()
+      }, 0)
+    },
+    async getAiDetails() {
+      NProgress.start()
+      const current = this.aiCurrent
+      const data = await M('getAIList^MWAI', {
+        current
+      })
+
+      if (data && data.data && data.data.LIST) {
+        this.aiDetails = this.aiDetails.concat(data.data.LIST)
+      }
+
+      if (data && data.data && data.data.aiCurrent) {
+        this.aiCurrent = data.data.aiCurrent
+      }
+
+      if (data && data.data && data.data.aiStatus) {
+        this.aiStatus = data.data.aiStatus
+      }
+      if (this.aiStatus === 'DONE') {
+        NProgress.done()
+        return
+      } else {
+        setTimeout(async() => {
+          await this.getAiDetails()
+        }, 0)
+      }
+    },
+    async favoriteSaveSet() {
+      await M('favoriteSaveSet^MWAI', this.formSaveSet)
+      const data = await M('getAISETS^MWAI')
+      if (data && data.favoriteSets) {
+        this.favoriteSets = data.favoriteSets
+      }
+      this.dialogSaveSet = false
+    }
+  }
+}
+</script>
+<style >
+  .right-menu {
+    float: right;
+  }
+    .right-menu-item {
+      display: inline-block;
+      margin: 0 8px;
+    }
+.handsontable th,
+.handsontable td,
+.rowHeader {
+  border-top-width: 0;
+  border-left-width: 0;
+  border-right: 1px solid #ccc;
+  border-bottom: 1px solid #ccc;
+  height: 21px !important;
+  empty-cells: show;
+  line-height: 20px !important;
+  padding: 0 2px 0 2px !important;
+  background-color: #fff;
+  vertical-align: top;
+  overflow: hidden;
+  outline-width: 0;
+  white-space: pre-line;
+  background-clip: padding-box;
+}
+.el-radio__label {
+  font-size: 12px !important;
+}
+.colHeader {
+  font-size: 11px !important;
+}
+.wordWrapClass {
+  text-overflow: ellipsis;
+  white-space: nowrap !important;
+  font-size: 12px !important;
+}
+table.minimalistBlack {
+  text-align: left;
+  border-collapse: collapse;
+  max-height: 60vh;
+  overflow: scroll;
+}
+table.minimalistBlack td,
+table.minimalistBlack th {
+  border: 1px solid #000000;
+  padding: 1px 3px;
+}
+table.minimalistBlack tbody td {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+table.minimalistBlack thead {
+}
+table.minimalistBlack thead th {
+  font-size: 15px;
+  font-weight: bold;
+  text-align: center;
+}
+table.minimalistBlack tfoot td {
+  font-size: 14px;
+}
+</style>
+<style>
+.handsontable .table th,
+.handsontable .table td {
+  border-top: none;
+}
+
+.handsontable tr {
+  background: #fff;
+}
+
+.handsontable td {
+  background-color: inherit;
+}
+
+.handsontable .table caption + thead tr:first-child th,
+.handsontable .table caption + thead tr:first-child td,
+.handsontable .table colgroup + thead tr:first-child th,
+.handsontable .table colgroup + thead tr:first-child td,
+.handsontable .table thead:first-child tr:first-child th,
+.handsontable .table thead:first-child tr:first-child td {
+  border-top: 1px solid #cccccc;
+}
+
+/* table-bordered */
+.handsontable .table-bordered {
+  border: 0;
+  border-collapse: separate;
+}
+
+.handsontable .table-bordered th,
+.handsontable .table-bordered td {
+  border-left: none;
+}
+
+.handsontable .table-bordered th:first-child,
+.handsontable .table-bordered td:first-child {
+  border-left: 1px solid #cccccc;
+}
+
+.handsontable .table > tbody > tr > td,
+.handsontable .table > tbody > tr > th,
+.handsontable .table > tfoot > tr > td,
+.handsontable .table > tfoot > tr > th,
+.handsontable .table > thead > tr > td,
+.handsontable .table > thead > tr > th {
+  line-height: 21px;
+  padding: 0 4px;
+}
+
+.col-lg-1.handsontable,
+.col-lg-10.handsontable,
+.col-lg-11.handsontable,
+.col-lg-12.handsontable,
+.col-lg-2.handsontable,
+.col-lg-3.handsontable,
+.col-lg-4.handsontable,
+.col-lg-5.handsontable,
+.col-lg-6.handsontable,
+.col-lg-7.handsontable,
+.col-lg-8.handsontable,
+.col-lg-9.handsontable,
+.col-md-1.handsontable,
+.col-md-10.handsontable,
+.col-md-11.handsontable,
+.col-md-12.handsontable,
+.col-md-2.handsontable,
+.col-md-3.handsontable,
+.col-md-4.handsontable,
+.col-md-5.handsontable,
+.col-md-6.handsontable,
+.col-md-7.handsontable,
+.col-md-8.handsontable,
+.col-md-9.handsontable .col-sm-1.handsontable,
+.col-sm-10.handsontable,
+.col-sm-11.handsontable,
+.col-sm-12.handsontable,
+.col-sm-2.handsontable,
+.col-sm-3.handsontable,
+.col-sm-4.handsontable,
+.col-sm-5.handsontable,
+.col-sm-6.handsontable,
+.col-sm-7.handsontable,
+.col-sm-8.handsontable,
+.col-sm-9.handsontable .col-xs-1.handsontable,
+.col-xs-10.handsontable,
+.col-xs-11.handsontable,
+.col-xs-12.handsontable,
+.col-xs-2.handsontable,
+.col-xs-3.handsontable,
+.col-xs-4.handsontable,
+.col-xs-5.handsontable,
+.col-xs-6.handsontable,
+.col-xs-7.handsontable,
+.col-xs-8.handsontable,
+.col-xs-9.handsontable {
+  padding-left: 0;
+  padding-right: 0;
+}
+
+.handsontable .table-striped > tbody > tr:nth-of-type(even) {
+  background-color: #fff;
+}
+
+.handsontable {
+  position: relative;
+}
+
+.handsontable .hide {
+  display: none;
+}
+
+.handsontable .relative {
+  position: relative;
+}
+
+.handsontable.htAutoSize {
+  visibility: hidden;
+  left: -99000px;
+  position: absolute;
+  top: -99000px;
+}
+
+.handsontable .wtHider {
+  width: 0;
+}
+
+.handsontable .wtSpreader {
+  position: relative;
+  width: 0; /*must be 0, otherwise blank space appears in scroll demo after scrolling max to the right */
+  height: auto;
+}
+
+.handsontable table,
+.handsontable tbody,
+.handsontable thead,
+.handsontable td,
+.handsontable th,
+.handsontable input,
+.handsontable textarea,
+.handsontable div {
+  box-sizing: content-box;
+  -webkit-box-sizing: content-box;
+  -moz-box-sizing: content-box;
+}
+
+.handsontable input,
+.handsontable textarea {
+  min-height: initial;
+}
+
+.handsontable table.htCore {
+  border-collapse: separate;
+  /* it must be separate, otherwise there are offset miscalculations in WebKit: http://stackoverflow.com/questions/2655987/border-collapse-differences-in-ff-and-webkit */
+  /* this actually only changes appearance of user selection - does not make text unselectable */
+  /* -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -o-user-select: none;
+  -ms-user-select: none;
+  user-select: none; */ /* no browser supports unprefixed version */
+  border-spacing: 0;
+  margin: 0;
+  border-width: 0;
+  table-layout: fixed;
+  width: 0;
+  outline-width: 0;
+  cursor: default;
+  /* reset bootstrap table style. for more info see: https://github.com/handsontable/handsontable/issues/224 */
+  max-width: none;
+  max-height: none;
+}
+
+.handsontable col {
+  width: 50px;
+}
+
+.handsontable col.rowHeader {
+  width: 50px;
+}
+
+.handsontable th,
+.handsontable td {
+  border-top-width: 0;
+  border-left-width: 0;
+  border-right: 1px solid #ccc;
+  border-bottom: 1px solid #ccc;
+  height: 22px;
+  empty-cells: show;
+  line-height: 21px;
+  padding: 0 4px 0 4px;
+  /* top, bottom padding different than 0 is handled poorly by FF with HTML5 doctype */
+  background-color: #fff;
+  vertical-align: top;
+  overflow: hidden;
+  outline-width: 0;
+  white-space: pre-line;
+  /* preserve new line character in cell */
+  background-clip: padding-box;
+}
+
+.handsontable td.htInvalid {
+  background-color: #ff4c42 !important; /*gives priority over td.area selection background*/
+}
+
+.handsontable td.htNoWrap {
+  white-space: nowrap;
+}
+
+.handsontable th:last-child {
+  /*Foundation framework fix*/
+  border-right: 1px solid #ccc;
+  border-bottom: 1px solid #ccc;
+}
+
+.handsontable tr:first-child th.htNoFrame,
+.handsontable th:first-child.htNoFrame,
+.handsontable th.htNoFrame {
+  border-left-width: 0;
+  background-color: white;
+  border-color: #fff;
+}
+
+.handsontable th:first-child,
+.handsontable th:nth-child(2),
+.handsontable td:first-of-type,
+.handsontable .htNoFrame + th,
+.handsontable .htNoFrame + td {
+  border-left: 1px solid #ccc;
+}
+
+.handsontable.htRowHeaders thead tr th:nth-child(2) {
+  border-left: 1px solid #ccc;
+}
+
+.handsontable tr:first-child th,
+.handsontable tr:first-child td {
+  border-top: 1px solid #ccc;
+}
+
+.ht_master:not(.innerBorderLeft):not(.emptyColumns) ~ .handsontable tbody tr th,
+.ht_master:not(.innerBorderLeft):not(.emptyColumns)
+  ~ .handsontable:not(.ht_clone_top)
+  thead
+  tr
+  th:first-child {
+  border-right-width: 0;
+}
+
+.ht_master:not(.innerBorderTop) thead tr:last-child th,
+.ht_master:not(.innerBorderTop) ~ .handsontable thead tr:last-child th,
+.ht_master:not(.innerBorderTop) thead tr.lastChild th,
+.ht_master:not(.innerBorderTop) ~ .handsontable thead tr.lastChild th {
+  border-bottom-width: 0;
+}
+
+.handsontable th {
+  background-color: #f0f0f0;
+  color: #222;
+  text-align: center;
+  font-weight: normal;
+  white-space: nowrap;
+}
+
+.handsontable thead th {
+  padding: 0;
+}
+
+.handsontable th.active {
+  background-color: #ccc;
+}
+.handsontable thead th .relative {
+  padding: 2px 4px;
+}
+
+#hot-display-license-info {
+  font-size: 10px;
+  color: #323232;
+  padding: 5px 0 3px 0;
+  font-family: Helvetica, Arial, sans-serif;
+  text-align: left;
+}
+
+#hot-display-license-info a {
+  font-size: 10px;
+}
+
+/* plugins */
+
+/* row + column resizer*/
+.handsontable .manualColumnResizer {
+  position: absolute;
+  top: 0;
+  cursor: col-resize;
+  z-index: 110;
+  width: 5px;
+  height: 25px;
+}
+
+.handsontable .manualRowResizer {
+  position: absolute;
+  left: 0;
+  cursor: row-resize;
+  z-index: 110;
+  height: 5px;
+  width: 50px;
+}
+
+.handsontable .manualColumnResizer:hover,
+.handsontable .manualColumnResizer.active,
+.handsontable .manualRowResizer:hover,
+.handsontable .manualRowResizer.active {
+  background-color: #34a9db;
+}
+
+.handsontable .manualColumnResizerGuide {
+  position: absolute;
+  right: 0;
+  top: 0;
+  background-color: #34a9db;
+  display: none;
+  width: 0;
+  border-right: 1px dashed #777;
+  margin-left: 5px;
+}
+
+.handsontable .manualRowResizerGuide {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  background-color: #34a9db;
+  display: none;
+  height: 0;
+  border-bottom: 1px dashed #777;
+  margin-top: 5px;
+}
+
+.handsontable .manualColumnResizerGuide.active,
+.handsontable .manualRowResizerGuide.active {
+  display: block;
+  z-index: 199;
+}
+
+.handsontable .columnSorting {
+  position: relative;
+}
+
+.handsontable .columnSorting.sortAction:hover {
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.handsontable span.colHeader {
+  display: inline-block;
+  line-height: 1.1;
+}
+
+/* Arrow position */
+.handsontable span.colHeader.columnSorting::before {
+  /* Centering start */
+  top: 50%;
+  margin-top: -6px; /* One extra pixel for purpose of proper positioning of sorting arrow, when `font-size` set to default */
+  /* Centering end */
+
+  padding-left: 8px; /* For purpose of continuous mouse over experience, when moving between the `span` and the `::before` elements */
+  position: absolute;
+  right: -9px;
+
+  content: "";
+  height: 10px;
+  width: 5px;
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position-x: right;
+}
+
+.handsontable span.colHeader.columnSorting.ascending::before {
+  /* arrow up; 20 x 40 px, scaled to 5 x 10 px; base64 size: 0.3kB */
+  background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAoCAMAAADJ7yrpAAAAKlBMVEUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKE86IAAAADXRSTlMABBEmRGprlJW72e77tTkTKwAAAFNJREFUeAHtzjkSgCAUBNHPgsoy97+ulGXRqJE5L+xkxoYt2UdsLb5bqFINz+aLuuLn5rIu2RkO3fZpWENimNgiw6iBYRTPMLJjGFxQZ1hxxb/xBI1qC8k39CdKAAAAAElFTkSuQmCC");
+}
+
+.handsontable span.colHeader.columnSorting.descending::before {
+  /* arrow down; 20 x 40 px, scaled to 5 x 10 px; base64 size: 0.3kB */
+  background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAoCAMAAADJ7yrpAAAAKlBMVEUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKE86IAAAADXRSTlMABBEmRGprlJW72e77tTkTKwAAAFJJREFUeAHtzjkSgCAQRNFmQYUZ7n9dKUvru0TmvPAn3br0QfgdZ5xx6x+rQn23GqTYnq1FDcnuzZIO2WmedVqIRVxgGKEyjNgYRjKGkZ1hFIZ3I70LyM0VtU8AAAAASUVORK5CYII=");
+}
+
+.htGhostTable
+  .htCore
+  span.colHeader.columnSorting:not(.indicatorDisabled)::after {
+  content: "*";
+  display: inline-block;
+  position: relative;
+  /* The multi-line header and header with longer text need more padding to not hide arrow,
+  we make header wider in `GhostTable` to make some space for arrow which is positioned absolutely in the main table */
+  padding-right: 20px;
+}
+
+/* Selection */
+.handsontable .wtBorder {
+  position: absolute;
+  font-size: 0;
+}
+.handsontable .wtBorder.hidden {
+  display: none !important;
+}
+
+/* A layer order of the selection types */
+.handsontable .wtBorder.current {
+  z-index: 10;
+}
+.handsontable .wtBorder.area {
+  z-index: 8;
+}
+.handsontable .wtBorder.fill {
+  z-index: 6;
+}
+
+.handsontable td.area,
+.handsontable td.area-1,
+.handsontable td.area-2,
+.handsontable td.area-3,
+.handsontable td.area-4,
+.handsontable td.area-5,
+.handsontable td.area-6,
+.handsontable td.area-7 {
+  position: relative;
+}
+
+.handsontable td.area:before,
+.handsontable td.area-1:before,
+.handsontable td.area-2:before,
+.handsontable td.area-3:before,
+.handsontable td.area-4:before,
+.handsontable td.area-5:before,
+.handsontable td.area-6:before,
+.handsontable td.area-7:before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  bottom: -100%\9; /* Fix for IE9 to spread the ":before" pseudo element to 100% height of the parent element */
+  background: #005eff;
+}
+
+/* Fix for IE10 and IE11 to spread the ":before" pseudo element to 100% height of the parent element */
+@media screen and (-ms-high-contrast: active), (-ms-high-contrast: none) {
+  .handsontable td.area:before,
+  .handsontable td.area-1:before,
+  .handsontable td.area-2:before,
+  .handsontable td.area-3:before,
+  .handsontable td.area-4:before,
+  .handsontable td.area-5:before,
+  .handsontable td.area-6:before,
+  .handsontable td.area-7:before {
+    bottom: -100%;
+  }
+}
+
+.handsontable td.area:before {
+  opacity: 0.1;
+}
+.handsontable td.area-1:before {
+  opacity: 0.2;
+}
+.handsontable td.area-2:before {
+  opacity: 0.27;
+}
+.handsontable td.area-3:before {
+  opacity: 0.35;
+}
+.handsontable td.area-4:before {
+  opacity: 0.41;
+}
+.handsontable td.area-5:before {
+  opacity: 0.47;
+}
+.handsontable td.area-6:before {
+  opacity: 0.54;
+}
+.handsontable td.area-7:before {
+  opacity: 0.58;
+}
+
+.handsontable tbody th.ht__highlight,
+.handsontable thead th.ht__highlight {
+  background-color: #dcdcdc;
+}
+
+.handsontable tbody th.ht__active_highlight,
+.handsontable thead th.ht__active_highlight {
+  background-color: #8eb0e7;
+  color: #000;
+}
+
+/* fill handle */
+
+.handsontable .wtBorder.corner {
+  font-size: 0;
+  cursor: crosshair;
+}
+
+.handsontable .htBorder.htFillBorder {
+  background: red;
+  width: 1px;
+  height: 1px;
+}
+
+.handsontableInput {
+  border: none;
+  outline-width: 0;
+  margin: 0;
+  padding: 1px 5px 0 5px;
+  font-family: inherit;
+  line-height: 21px;
+  font-size: inherit;
+  box-shadow: 0 0 0 2px #5292f7 inset;
+  resize: none;
+  /*below are needed to overwrite stuff added by jQuery UI Bootstrap theme*/
+  display: block;
+  color: #000;
+  border-radius: 0;
+  background-color: #fff;
+  /*overwrite styles potentionally made by a framework*/
+}
+
+.handsontableInputHolder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 104;
+}
+
+.htSelectEditor {
+  -webkit-appearance: menulist-button !important;
+  position: absolute;
+  width: auto;
+}
+
+/*
+TextRenderer readOnly cell
+*/
+
+.handsontable .htDimmed {
+  color: #777;
+}
+
+.handsontable .htSubmenu {
+  position: relative;
+}
+
+.handsontable .htSubmenu :after {
+  content: "\25B6";
+  color: #777;
+  position: absolute;
+  right: 5px;
+  font-size: 9px;
+}
+
+/*
+TextRenderer horizontal alignment
+*/
+.handsontable .htLeft {
+  text-align: left;
+}
+.handsontable .htCenter {
+  text-align: center;
+}
+.handsontable .htRight {
+  text-align: right;
+}
+.handsontable .htJustify {
+  text-align: justify;
+}
+/*
+TextRenderer vertical alignment
+*/
+.handsontable .htTop {
+  vertical-align: top;
+}
+.handsontable .htMiddle {
+  vertical-align: middle;
+}
+.handsontable .htBottom {
+  vertical-align: bottom;
+}
+
+/*
+TextRenderer placeholder value
+*/
+
+.handsontable .htPlaceholder {
+  color: #999;
+}
+
+/*
+AutocompleteRenderer down arrow
+*/
+
+.handsontable .htAutocompleteArrow {
+  float: right;
+  font-size: 10px;
+  color: #eee;
+  cursor: default;
+  width: 16px;
+  text-align: center;
+}
+
+.handsontable td .htAutocompleteArrow:hover {
+  color: #777;
+}
+
+.handsontable td.area .htAutocompleteArrow {
+  color: #d3d3d3;
+}
+
+/*
+CheckboxRenderer
+*/
+.handsontable .htCheckboxRendererInput {
+  display: inline-block;
+  vertical-align: middle;
+}
+.handsontable .htCheckboxRendererInput.noValue {
+  opacity: 0.5;
+}
+.handsontable .htCheckboxRendererLabel {
+  cursor: pointer;
+  display: inline-block;
+  width: 100%;
+}
+
+/**
+ * Handsontable in Handsontable
+ */
+
+.handsontable .handsontable.ht_clone_top .wtHider {
+  padding: 0 0 5px 0;
+}
+
+/**
+* Autocomplete Editor
+*/
+.handsontable .autocompleteEditor.handsontable {
+  padding-right: 17px;
+}
+.handsontable .autocompleteEditor.handsontable.htMacScroll {
+  padding-right: 15px;
+}
+
+/**
+ * Handsontable listbox theme
+ */
+
+.handsontable.listbox {
+  margin: 0;
+}
+
+.handsontable.listbox .ht_master table {
+  border: 1px solid #ccc;
+  border-collapse: separate;
+  background: white;
+}
+
+.handsontable.listbox th,
+.handsontable.listbox tr:first-child th,
+.handsontable.listbox tr:last-child th,
+.handsontable.listbox tr:first-child td,
+.handsontable.listbox td {
+  border-color: transparent;
+}
+
+.handsontable.listbox th,
+.handsontable.listbox td {
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.handsontable.listbox td.htDimmed {
+  cursor: default;
+  color: inherit;
+  font-style: inherit;
+}
+
+.handsontable.listbox .wtBorder {
+  visibility: hidden;
+}
+
+.handsontable.listbox tr td.current,
+.handsontable.listbox tr:hover td {
+  background: #eee;
+}
+
+.ht_clone_top {
+  z-index: 101;
+}
+
+.ht_clone_left {
+  z-index: 102;
+}
+
+.ht_clone_top_left_corner,
+.ht_clone_bottom_left_corner {
+  z-index: 103;
+}
+
+.ht_clone_debug {
+  z-index: 103;
+}
+
+.handsontable td.htSearchResult {
+  background: #fcedd9;
+  color: #583707;
+}
+
+/*
+Cell borders
+*/
+.htBordered {
+  /*box-sizing: border-box !important;*/
+  border-width: 1px;
+}
+.htBordered.htTopBorderSolid {
+  border-top-style: solid;
+  border-top-color: #000;
+}
+.htBordered.htRightBorderSolid {
+  border-right-style: solid;
+  border-right-color: #000;
+}
+.htBordered.htBottomBorderSolid {
+  border-bottom-style: solid;
+  border-bottom-color: #000;
+}
+.htBordered.htLeftBorderSolid {
+  border-left-style: solid;
+  border-left-color: #000;
+}
+
+.handsontable tbody tr th:nth-last-child(2) {
+  border-right: 1px solid #ccc;
+}
+
+.handsontable thead tr:nth-last-child(2) th.htGroupIndicatorContainer {
+  border-bottom: 1px solid #ccc;
+  padding-bottom: 5px;
+}
+
+.ht_clone_top_left_corner thead tr th:nth-last-child(2) {
+  border-right: 1px solid #ccc;
+}
+
+.htCollapseButton {
+  width: 10px;
+  height: 10px;
+  line-height: 10px;
+  text-align: center;
+  border-radius: 5px;
+  border: 1px solid #f3f3f3;
+  -webkit-box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.4);
+  box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  margin-bottom: 3px;
+  position: relative;
+}
+
+.htCollapseButton:after {
+  content: "";
+  height: 300%;
+  width: 1px;
+  display: block;
+  background: #ccc;
+  margin-left: 4px;
+  position: absolute;
+  /*top: -300%;*/
+  bottom: 10px;
+}
+
+thead .htCollapseButton {
+  right: 5px;
+  position: absolute;
+  top: 5px;
+  background: #fff;
+}
+
+thead .htCollapseButton:after {
+  height: 1px;
+  width: 700%;
+  right: 10px;
+  top: 4px;
+}
+
+.handsontable tr th .htExpandButton {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  line-height: 10px;
+  text-align: center;
+  border-radius: 5px;
+  border: 1px solid #f3f3f3;
+  -webkit-box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.4);
+  box-shadow: 1px 1px 3px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  top: 0;
+  display: none;
+}
+
+.handsontable thead tr th .htExpandButton {
+  /*left: 5px;*/
+  top: 5px;
+}
+
+.handsontable tr th .htExpandButton.clickable {
+  display: block;
+}
+
+.collapsibleIndicator {
+  position: absolute;
+  top: 50%;
+  transform: translate(0%, -50%);
+  right: 5px;
+  border: 1px solid #a6a6a6;
+  line-height: 10px;
+  color: #222;
+  border-radius: 10px;
+  font-size: 10px;
+  width: 10px;
+  height: 10px;
+  cursor: pointer;
+  -webkit-box-shadow: 0 0 0 6px rgba(238, 238, 238, 1);
+  -moz-box-shadow: 0 0 0 6px rgba(238, 238, 238, 1);
+  box-shadow: 0 0 0 6px rgba(238, 238, 238, 1);
+  background: #eee;
+}
+
+.handsontable col.hidden {
+  width: 0 !important;
+}
+
+.handsontable table tr th.lightRightBorder {
+  border-right: 1px solid #e6e6e6;
+}
+
+.handsontable tr.hidden,
+.handsontable tr.hidden td,
+.handsontable tr.hidden th {
+  display: none;
+}
+
+.ht_master,
+.ht_clone_left,
+.ht_clone_top,
+.ht_clone_bottom {
+  overflow: hidden;
+}
+
+.ht_master .wtHolder {
+  overflow: auto;
+}
+
+.handsontable .ht_master thead,
+.handsontable .ht_master tr th,
+.handsontable .ht_clone_left thead {
+  visibility: hidden;
+}
+
+.ht_clone_top .wtHolder,
+.ht_clone_left .wtHolder,
+.ht_clone_bottom .wtHolder {
+  overflow: hidden;
+}
+
+/*
+
+ Handsontable Mobile Text Editor stylesheet
+
+ */
+
+.handsontable.mobile,
+.handsontable.mobile .wtHolder {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  -webkit-overflow-scrolling: touch;
+}
+
+.htMobileEditorContainer {
+  display: none;
+  position: absolute;
+  top: 0;
+  width: 70%;
+  height: 54pt;
+  background: #f8f8f8;
+  border-radius: 20px;
+  border: 1px solid #ebebeb;
+  z-index: 999;
+  box-sizing: border-box;
+  -webkit-box-sizing: border-box;
+  -webkit-text-size-adjust: none;
+}
+
+.topLeftSelectionHandle:not(.ht_master .topLeftSelectionHandle),
+.topLeftSelectionHandle-HitArea:not(.ht_master
+    .topLeftSelectionHandle-HitArea) {
+  z-index: 9999;
+}
+
+/* Initial left/top coordinates - overwritten when actual position is set */
+.topLeftSelectionHandle,
+.topLeftSelectionHandle-HitArea,
+.bottomRightSelectionHandle,
+.bottomRightSelectionHandle-HitArea {
+  left: -10000px;
+  top: -10000px;
+}
+
+.htMobileEditorContainer.active {
+  display: block;
+}
+
+.htMobileEditorContainer .inputs {
+  position: absolute;
+  right: 210pt;
+  bottom: 10pt;
+  top: 10pt;
+  left: 14px;
+  height: 34pt;
+}
+
+.htMobileEditorContainer .inputs textarea {
+  font-size: 13pt;
+  border: 1px solid #a1a1a1;
+  -webkit-appearance: none;
+  -webkit-box-shadow: none;
+  -moz-box-shadow: none;
+  box-shadow: none;
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 0;
+  bottom: 0;
+  padding: 7pt;
+}
+
+.htMobileEditorContainer .cellPointer {
+  position: absolute;
+  top: -13pt;
+  height: 0;
+  width: 0;
+  left: 30px;
+
+  border-left: 13pt solid transparent;
+  border-right: 13pt solid transparent;
+  border-bottom: 13pt solid #ebebeb;
+}
+
+.htMobileEditorContainer .cellPointer.hidden {
+  display: none;
+}
+
+.htMobileEditorContainer .cellPointer:before {
+  content: "";
+  display: block;
+  position: absolute;
+  top: 2px;
+  height: 0;
+  width: 0;
+  left: -13pt;
+
+  border-left: 13pt solid transparent;
+  border-right: 13pt solid transparent;
+  border-bottom: 13pt solid #f8f8f8;
+}
+
+.htMobileEditorContainer .moveHandle {
+  position: absolute;
+  top: 10pt;
+  left: 5px;
+  width: 30px;
+  bottom: 0px;
+  cursor: move;
+  z-index: 9999;
+}
+
+.htMobileEditorContainer .moveHandle:after {
+  content: "..\a..\a..\a..";
+  white-space: pre;
+  line-height: 10px;
+  font-size: 20pt;
+  display: inline-block;
+  margin-top: -8px;
+  color: #ebebeb;
+}
+
+.htMobileEditorContainer .positionControls {
+  width: 205pt;
+  position: absolute;
+  right: 5pt;
+  top: 0;
+  bottom: 0;
+}
+
+.htMobileEditorContainer .positionControls > div {
+  width: 50pt;
+  height: 100%;
+  float: left;
+}
+
+.htMobileEditorContainer .positionControls > div:after {
+  content: " ";
+  display: block;
+  width: 15pt;
+  height: 15pt;
+  text-align: center;
+  line-height: 50pt;
+}
+
+.htMobileEditorContainer .leftButton:after,
+.htMobileEditorContainer .rightButton:after,
+.htMobileEditorContainer .upButton:after,
+.htMobileEditorContainer .downButton:after {
+  transform-origin: 5pt 5pt;
+  -webkit-transform-origin: 5pt 5pt;
+  margin: 21pt 0 0 21pt;
+}
+
+.htMobileEditorContainer .leftButton:after {
+  border-top: 2px solid #288ffe;
+  border-left: 2px solid #288ffe;
+  -webkit-transform: rotate(-45deg);
+  /*margin-top: 17pt;*/
+  /*margin-left: 20pt;*/
+}
+.htMobileEditorContainer .leftButton:active:after {
+  border-color: #cfcfcf;
+}
+
+.htMobileEditorContainer .rightButton:after {
+  border-top: 2px solid #288ffe;
+  border-left: 2px solid #288ffe;
+  -webkit-transform: rotate(135deg);
+  /*margin-top: 17pt;*/
+  /*margin-left: 10pt;*/
+}
+.htMobileEditorContainer .rightButton:active:after {
+  border-color: #cfcfcf;
+}
+
+.htMobileEditorContainer .upButton:after {
+  /*border-top: 2px solid #cfcfcf;*/
+  border-top: 2px solid #288ffe;
+  border-left: 2px solid #288ffe;
+  -webkit-transform: rotate(45deg);
+  /*margin-top: 22pt;*/
+  /*margin-left: 15pt;*/
+}
+.htMobileEditorContainer .upButton:active:after {
+  border-color: #cfcfcf;
+}
+
+.htMobileEditorContainer .downButton:after {
+  border-top: 2px solid #288ffe;
+  border-left: 2px solid #288ffe;
+  -webkit-transform: rotate(225deg);
+  /*margin-top: 15pt;*/
+  /*margin-left: 15pt;*/
+}
+.htMobileEditorContainer .downButton:active:after {
+  border-color: #cfcfcf;
+}
+
+.handsontable.hide-tween {
+  -webkit-animation: opacity-hide 0.3s;
+  animation: opacity-hide 0.3s;
+  animation-fill-mode: forwards;
+  -webkit-animation-fill-mode: forwards;
+}
+
+.handsontable.show-tween {
+  -webkit-animation: opacity-show 0.3s;
+  animation: opacity-show 0.3s;
+  animation-fill-mode: forwards;
+  -webkit-animation-fill-mode: forwards;
+}
+
+@charset "UTF-8";
+
+/*!
+ * Pikaday
+ * Copyright © 2014 David Bushell | BSD & MIT license | http://dbushell.com/
+ */
+
+.pika-single {
+  z-index: 9999;
+  display: block;
+  position: relative;
+  color: #333;
+  background: #fff;
+  border: 1px solid #ccc;
+  border-bottom-color: #bbb;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+/*
+clear child float (pika-lendar), using the famous micro clearfix hack
+http://nicolasgallagher.com/micro-clearfix-hack/
+*/
+.pika-single:before,
+.pika-single:after {
+  content: " ";
+  display: table;
+}
+.pika-single:after {
+  clear: both;
+}
+.pika-single {
+  *zoom: 1;
+}
+
+.pika-single.is-hidden {
+  display: none;
+}
+
+.pika-single.is-bound {
+  position: absolute;
+  box-shadow: 0 5px 15px -5px rgba(0, 0, 0, 0.5);
+}
+
+.pika-lendar {
+  float: left;
+  width: 240px;
+  margin: 8px;
+}
+
+.pika-title {
+  position: relative;
+  text-align: center;
+}
+
+.pika-label {
+  display: inline-block;
+  *display: inline;
+  position: relative;
+  z-index: 9999;
+  overflow: hidden;
+  margin: 0;
+  padding: 5px 3px;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: bold;
+  background-color: #fff;
+}
+.pika-title select {
+  cursor: pointer;
+  position: absolute;
+  z-index: 9998;
+  margin: 0;
+  left: 0;
+  top: 5px;
+  filter: alpha(opacity=0);
+  opacity: 0;
+}
+
+.pika-prev,
+.pika-next {
+  display: block;
+  cursor: pointer;
+  position: relative;
+  outline: none;
+  border: 0;
+  padding: 0;
+  width: 20px;
+  height: 30px;
+  /* hide text using text-indent trick, using width value (it's enough) */
+  text-indent: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  background-color: transparent;
+  background-position: center center;
+  background-repeat: no-repeat;
+  background-size: 75% 75%;
+  opacity: 0.5;
+  *position: absolute;
+  *top: 0;
+}
+
+.pika-prev:hover,
+.pika-next:hover {
+  opacity: 1;
+}
+
+.pika-prev,
+.is-rtl .pika-next {
+  float: left;
+  background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAeCAYAAAAsEj5rAAAAUklEQVR42u3VMQoAIBADQf8Pgj+OD9hG2CtONJB2ymQkKe0HbwAP0xucDiQWARITIDEBEnMgMQ8S8+AqBIl6kKgHiXqQqAeJepBo/z38J/U0uAHlaBkBl9I4GwAAAABJRU5ErkJggg==");
+  *left: 0;
+}
+
+.pika-next,
+.is-rtl .pika-prev {
+  float: right;
+  background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAeCAYAAAAsEj5rAAAAU0lEQVR42u3VOwoAMAgE0dwfAnNjU26bYkBCFGwfiL9VVWoO+BJ4Gf3gtsEKKoFBNTCoCAYVwaAiGNQGMUHMkjGbgjk2mIONuXo0nC8XnCf1JXgArVIZAQh5TKYAAAAASUVORK5CYII=");
+  *right: 0;
+}
+
+.pika-prev.is-disabled,
+.pika-next.is-disabled {
+  cursor: default;
+  opacity: 0.2;
+}
+
+.pika-select {
+  display: inline-block;
+  *display: inline;
+}
+
+.pika-table {
+  width: 100%;
+  border-collapse: collapse;
+  border-spacing: 0;
+  border: 0;
+}
+
+.pika-table th,
+.pika-table td {
+  width: 14.285714285714286%;
+  padding: 0;
+}
+
+.pika-table th {
+  color: #999;
+  font-size: 12px;
+  line-height: 25px;
+  font-weight: bold;
+  text-align: center;
+}
+
+.pika-button {
+  cursor: pointer;
+  display: block;
+  box-sizing: border-box;
+  -moz-box-sizing: border-box;
+  outline: none;
+  border: 0;
+  margin: 0;
+  width: 100%;
+  padding: 5px;
+  color: #666;
+  font-size: 12px;
+  line-height: 15px;
+  text-align: right;
+  background: #f5f5f5;
+}
+
+.pika-week {
+  font-size: 11px;
+  color: #999;
+}
+
+.is-today .pika-button {
+  color: #33aaff;
+  font-weight: bold;
+}
+
+.is-selected .pika-button {
+  color: #fff;
+  font-weight: bold;
+  background: #33aaff;
+  box-shadow: inset 0 1px 3px #178fe5;
+  border-radius: 3px;
+}
+
+.is-inrange .pika-button {
+  background: #d5e9f7;
+}
+
+.is-startrange .pika-button {
+  color: #fff;
+  background: #6cb31d;
+  box-shadow: none;
+  border-radius: 3px;
+}
+
+.is-endrange .pika-button {
+  color: #fff;
+  background: #33aaff;
+  box-shadow: none;
+  border-radius: 3px;
+}
+
+.is-disabled .pika-button,
+.is-outside-current-month .pika-button {
+  pointer-events: none;
+  cursor: default;
+  color: #999;
+  opacity: 0.3;
+}
+
+.pika-button:hover {
+  color: #fff;
+  background: #ff8000;
+  box-shadow: none;
+  border-radius: 3px;
+}
+
+/* styling for abbr */
+.pika-table abbr {
+  border-bottom: none;
+  cursor: help;
+}
+
+.htCommentCell {
+  position: relative;
+}
+
+.htCommentCell:after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-left: 6px solid transparent;
+  border-top: 6px solid black;
+}
+
+.htComments {
+  display: none;
+  z-index: 1059;
+  position: absolute;
+}
+
+.htCommentTextArea {
+  box-shadow: rgba(0, 0, 0, 0.117647) 0 1px 3px,
+    rgba(0, 0, 0, 0.239216) 0 1px 2px;
+  -webkit-box-sizing: border-box;
+  -moz-box-sizing: border-box;
+  box-sizing: border-box;
+  border: none;
+  border-left: 3px solid #ccc;
+  background-color: #fff;
+  width: 215px;
+  height: 90px;
+  font-size: 12px;
+  padding: 5px;
+  outline: 0px !important;
+  -webkit-appearance: none;
+}
+
+.htCommentTextArea:focus {
+  box-shadow: rgba(0, 0, 0, 0.117647) 0 1px 3px,
+    rgba(0, 0, 0, 0.239216) 0 1px 2px, inset 0 0 0 1px #5292f7;
+  border-left: 3px solid #5292f7;
+}
+
+/*!
+ * Handsontable ContextMenu
+ */
+
+.htContextMenu:not(.htGhostTable) {
+  display: none;
+  position: absolute;
+  z-index: 1060; /* needs to be higher than 1050 - z-index for Twitter Bootstrap modal (#1569) */
+}
+
+.htContextMenu .ht_clone_top,
+.htContextMenu .ht_clone_left,
+.htContextMenu .ht_clone_corner,
+.htContextMenu .ht_clone_debug {
+  display: none;
+}
+
+.htContextMenu table.htCore {
+  border: 1px solid #ccc;
+  border-bottom-width: 2px;
+  border-right-width: 2px;
+}
+
+.htContextMenu .wtBorder {
+  visibility: hidden;
+}
+
+.htContextMenu table tbody tr td {
+  background: white;
+  border-width: 0;
+  padding: 4px 6px 0 6px;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.htContextMenu table tbody tr td:first-child {
+  border: 0;
+}
+
+.htContextMenu table tbody tr td.htDimmed {
+  font-style: normal;
+  color: #323232;
+}
+
+.htContextMenu table tbody tr td.current,
+.htContextMenu table tbody tr td.zeroclipboard-is-hover {
+  background: #f3f3f3;
+}
+
+.htContextMenu table tbody tr td.htSeparator {
+  border-top: 1px solid #e6e6e6;
+  height: 0;
+  padding: 0;
+  cursor: default;
+}
+
+.htContextMenu table tbody tr td.htDisabled {
+  color: #999;
+  cursor: default;
+}
+
+.htContextMenu table tbody tr td.htDisabled:hover {
+  background: #fff;
+  color: #999;
+  cursor: default;
+}
+
+.htContextMenu table tbody tr.htHidden {
+  display: none;
+}
+
+.htContextMenu table tbody tr td .htItemWrapper {
+  margin-left: 10px;
+  margin-right: 6px;
+}
+
+.htContextMenu table tbody tr td div span.selected {
+  margin-top: -2px;
+  position: absolute;
+  left: 4px;
+}
+
+.htContextMenu .ht_master .wtHolder {
+  overflow: hidden;
+}
+
+textarea#HandsontableCopyPaste {
+  position: fixed !important;
+  top: 0 !important;
+  right: 100% !important;
+  overflow: hidden;
+  opacity: 0;
+  outline: 0 none !important;
+}
+
+.htRowHeaders
+  .ht_master.innerBorderLeft
+  ~ .ht_clone_top_left_corner
+  th:nth-child(2),
+.htRowHeaders .ht_master.innerBorderLeft ~ .ht_clone_left td:first-of-type {
+  border-left: 0 none;
+}
+
+.handsontable .wtHider {
+  position: relative;
+}
+.handsontable.ht__manualColumnMove.after-selection--columns
+  thead
+  th.ht__highlight {
+  cursor: move;
+  cursor: -moz-grab;
+  cursor: -webkit-grab;
+  cursor: grab;
+}
+.handsontable.ht__manualColumnMove.on-moving--columns,
+.handsontable.ht__manualColumnMove.on-moving--columns thead th.ht__highlight {
+  cursor: move;
+  cursor: -moz-grabbing;
+  cursor: -webkit-grabbing;
+  cursor: grabbing;
+}
+.handsontable.ht__manualColumnMove.on-moving--columns .manualColumnResizer {
+  display: none;
+}
+.handsontable .ht__manualColumnMove--guideline,
+.handsontable .ht__manualColumnMove--backlight {
+  position: absolute;
+  height: 100%;
+  display: none;
+}
+.handsontable .ht__manualColumnMove--guideline {
+  background: #757575;
+  width: 2px;
+  top: 0;
+  margin-left: -1px;
+  z-index: 105;
+}
+.handsontable .ht__manualColumnMove--backlight {
+  background: #343434;
+  background: rgba(52, 52, 52, 0.25);
+  display: none;
+  z-index: 105;
+  pointer-events: none;
+}
+.handsontable.on-moving--columns.show-ui .ht__manualColumnMove--guideline,
+.handsontable.on-moving--columns .ht__manualColumnMove--backlight {
+  display: block;
+}
+
+.handsontable .wtHider {
+  position: relative;
+}
+.handsontable.ht__manualRowMove.after-selection--rows tbody th.ht__highlight {
+  cursor: move;
+  cursor: -moz-grab;
+  cursor: -webkit-grab;
+  cursor: grab;
+}
+.handsontable.ht__manualRowMove.on-moving--rows,
+.handsontable.ht__manualRowMove.on-moving--rows tbody th.ht__highlight {
+  cursor: move;
+  cursor: -moz-grabbing;
+  cursor: -webkit-grabbing;
+  cursor: grabbing;
+}
+.handsontable.ht__manualRowMove.on-moving--rows .manualRowResizer {
+  display: none;
+}
+.handsontable .ht__manualRowMove--guideline,
+.handsontable .ht__manualRowMove--backlight {
+  position: absolute;
+  width: 100%;
+  display: none;
+}
+.handsontable .ht__manualRowMove--guideline {
+  background: #757575;
+  height: 2px;
+  left: 0;
+  margin-top: -1px;
+  z-index: 105;
+}
+.handsontable .ht__manualRowMove--backlight {
+  background: #343434;
+  background: rgba(52, 52, 52, 0.25);
+  display: none;
+  z-index: 105;
+  pointer-events: none;
+}
+.handsontable.on-moving--rows.show-ui .ht__manualRowMove--guideline,
+.handsontable.on-moving--rows .ht__manualRowMove--backlight {
+  display: block;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"]:not([class*="fullySelectedMergedCell"]):before {
+  opacity: 0;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"][class*="fullySelectedMergedCell-multiple"]:before {
+  opacity: 0.1;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"][class*="fullySelectedMergedCell-0"]:before {
+  opacity: 0.1;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"][class*="fullySelectedMergedCell-1"]:before {
+  opacity: 0.2;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"][class*="fullySelectedMergedCell-2"]:before {
+  opacity: 0.27;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"][class*="fullySelectedMergedCell-3"]:before {
+  opacity: 0.35;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"][class*="fullySelectedMergedCell-4"]:before {
+  opacity: 0.41;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"][class*="fullySelectedMergedCell-5"]:before {
+  opacity: 0.47;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"][class*="fullySelectedMergedCell-6"]:before {
+  opacity: 0.54;
+}
+
+.handsontable
+  tbody
+  td[rowspan][class*="area"][class*="highlight"][class*="fullySelectedMergedCell-7"]:before {
+  opacity: 0.58;
+}
+
+/*!
+ * Handsontable DropdownMenu
+ */
+.handsontable .changeType {
+  background: #eee;
+  border-radius: 2px;
+  border: 1px solid #bbb;
+  color: #bbb;
+  font-size: 9px;
+  line-height: 9px;
+  padding: 2px;
+  margin: 3px 1px 0 5px;
+  float: right;
+}
+.handsontable .changeType:before {
+  content: "\25BC\ ";
+}
+
+.handsontable .changeType:hover {
+  border: 1px solid #777;
+  color: #777;
+  cursor: pointer;
+}
+
+.htDropdownMenu:not(.htGhostTable) {
+  display: none;
+  position: absolute;
+  z-index: 1060; /* needs to be higher than 1050 - z-index for Twitter Bootstrap modal (#1569) */
+}
+
+.htDropdownMenu .ht_clone_top,
+.htDropdownMenu .ht_clone_left,
+.htDropdownMenu .ht_clone_corner,
+.htDropdownMenu .ht_clone_debug {
+  display: none;
+}
+
+.htDropdownMenu table.htCore {
+  border: 1px solid #bbb;
+  border-bottom-width: 2px;
+  border-right-width: 2px;
+}
+
+.htDropdownMenu .wtBorder {
+  visibility: hidden;
+}
+
+.htDropdownMenu table tbody tr td {
+  background: white;
+  border-width: 0;
+  padding: 4px 6px 0 6px;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.htDropdownMenu table tbody tr td:first-child {
+  border: 0;
+}
+
+.htDropdownMenu table tbody tr td.htDimmed {
+  font-style: normal;
+  color: #323232;
+}
+
+.htDropdownMenu table tbody tr td.current,
+.htDropdownMenu table tbody tr td.zeroclipboard-is-hover {
+  background: #e9e9e9;
+}
+
+.htDropdownMenu table tbody tr td.htSeparator {
+  border-top: 1px solid #e6e6e6;
+  height: 0;
+  padding: 0;
+  cursor: default;
+}
+
+.htDropdownMenu table tbody tr td.htDisabled {
+  color: #999;
+}
+
+.htDropdownMenu table tbody tr td.htDisabled:hover {
+  background: #fff;
+  color: #999;
+  cursor: default;
+}
+
+.htDropdownMenu:not(.htGhostTable) table tbody tr.htHidden {
+  display: none;
+}
+
+.htDropdownMenu table tbody tr td .htItemWrapper {
+  margin-left: 10px;
+  margin-right: 10px;
+}
+
+.htDropdownMenu table tbody tr td div span.selected {
+  margin-top: -2px;
+  position: absolute;
+  left: 4px;
+}
+
+.htDropdownMenu .ht_master .wtHolder {
+  overflow: hidden;
+}
+
+/* Column's number position */
+.handsontable span.colHeader.columnSorting::after {
+  /* Centering start */
+  top: 50%;
+  margin-top: -2px; /* Two extra pixels (-2 instead of -4) for purpose of proper positioning of numeric indicators, when `font-size` set to default */
+  /* Centering end */
+
+  position: absolute;
+  right: -15px;
+  padding-left: 5px; /* For purpose of continuous mouse over experience, when moving between the `::before` and the `::after` elements */
+
+  font-size: 8px;
+  height: 8px;
+  line-height: 1.1;
+  text-decoration: underline; /* Workaround for IE9 - IE11 */
+}
+
+/* Workaround for IE9 - IE11, https://stackoverflow.com/a/21902566, https://stackoverflow.com/a/32120247 */
+.handsontable span.colHeader.columnSorting::after {
+  text-decoration: none;
+}
+
+/* We support up to 7 numeric indicators, describing order of column in sorted columns queue */
+.handsontable span.colHeader.columnSorting[class^="sort-"]::after,
+.handsontable span.colHeader.columnSorting[class*=" sort-"]::after {
+  content: "+";
+}
+
+.handsontable span.colHeader.columnSorting.sort-1::after {
+  content: "1";
+}
+
+.handsontable span.colHeader.columnSorting.sort-2::after {
+  content: "2";
+}
+
+.handsontable span.colHeader.columnSorting.sort-3::after {
+  content: "3";
+}
+
+.handsontable span.colHeader.columnSorting.sort-4::after {
+  content: "4";
+}
+
+.handsontable span.colHeader.columnSorting.sort-5::after {
+  content: "5";
+}
+
+.handsontable span.colHeader.columnSorting.sort-6::after {
+  content: "6";
+}
+
+.handsontable span.colHeader.columnSorting.sort-7::after {
+  content: "7";
+}
+
+/* Drop-down menu widens header by 5 pixels, sort sequence numbers won't overlap the icon; mainly for the IE9+ */
+.htGhostTable
+  th
+  div
+  button.changeType
+  + span.colHeader.columnSorting:not(.indicatorDisabled) {
+  padding-right: 5px;
+}
+
+/*!
+ * Handsontable Filters
+ */
+
+/* Conditions menu */
+.htFiltersConditionsMenu:not(.htGhostTable) {
+  display: none;
+  position: absolute;
+  z-index: 1070;
+}
+
+.htFiltersConditionsMenu .ht_clone_top,
+.htFiltersConditionsMenu .ht_clone_left,
+.htFiltersConditionsMenu .ht_clone_corner,
+.htFiltersConditionsMenu .ht_clone_debug {
+  display: none;
+}
+
+.htFiltersConditionsMenu table.htCore {
+  border: 1px solid #bbb;
+  border-bottom-width: 2px;
+  border-right-width: 2px;
+}
+
+.htFiltersConditionsMenu .wtBorder {
+  visibility: hidden;
+}
+
+.htFiltersConditionsMenu table tbody tr td {
+  background: white;
+  border-width: 0;
+  padding: 4px 6px 0 6px;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.htFiltersConditionsMenu table tbody tr td:first-child {
+  border: 0;
+}
+
+.htFiltersConditionsMenu table tbody tr td.htDimmed {
+  font-style: normal;
+  color: #323232;
+}
+
+.htFiltersConditionsMenu table tbody tr td.current,
+.htFiltersConditionsMenu table tbody tr td.zeroclipboard-is-hover {
+  background: #e9e9e9;
+}
+
+.htFiltersConditionsMenu table tbody tr td.htSeparator {
+  border-top: 1px solid #e6e6e6;
+  height: 0;
+  padding: 0;
+}
+
+.htFiltersConditionsMenu table tbody tr td.htDisabled {
+  color: #999;
+}
+
+.htFiltersConditionsMenu table tbody tr td.htDisabled:hover {
+  background: #fff;
+  color: #999;
+  cursor: default;
+}
+
+.htFiltersConditionsMenu table tbody tr td .htItemWrapper {
+  margin-left: 10px;
+  margin-right: 10px;
+}
+
+.htFiltersConditionsMenu table tbody tr td div span.selected {
+  margin-top: -2px;
+  position: absolute;
+  left: 4px;
+}
+
+.htFiltersConditionsMenu .ht_master .wtHolder {
+  overflow: hidden;
+}
+
+.handsontable .htMenuFiltering {
+  border-bottom: 1px dotted #ccc;
+  height: 135px;
+  overflow: hidden;
+}
+
+.handsontable .ht_master table td.htCustomMenuRenderer {
+  background-color: #fff;
+  cursor: auto;
+}
+
+/* Menu label */
+.handsontable .htFiltersMenuLabel {
+  font-size: 12px;
+}
+
+/* Component action bar */
+.handsontable .htFiltersMenuActionBar {
+  text-align: center;
+  padding-top: 10px;
+  padding-bottom: 3px;
+}
+
+/* Component filter by conditional */
+.handsontable .htFiltersMenuCondition.border {
+  border-bottom: 1px dotted #ccc !important;
+}
+.handsontable .htFiltersMenuCondition .htUIInput {
+  padding: 0 0 5px 0;
+}
+
+/* Component filter by value */
+.handsontable .htFiltersMenuValue {
+  border-bottom: 1px dotted #ccc !important;
+}
+.handsontable .htFiltersMenuValue .htUIMultipleSelectSearch {
+  padding: 0;
+}
+.handsontable .htFiltersMenuCondition .htUIInput input,
+.handsontable .htFiltersMenuValue .htUIMultipleSelectSearch input {
+  padding: 4px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.htUIMultipleSelect .ht_master .wtHolder {
+  overflow-y: scroll;
+}
+
+.handsontable .htFiltersActive .changeType {
+  border: 1px solid #509272;
+  color: #18804e;
+  background-color: #d2e0d9;
+}
+
+.handsontable .htUISelectAll {
+  margin-right: 10px;
+}
+
+.handsontable .htUIClearAll,
+.handsontable .htUISelectAll {
+  display: inline-block;
+}
+
+.handsontable .htUIClearAll a,
+.handsontable .htUISelectAll a {
+  color: #3283d8;
+  font-size: 12px;
+}
+
+.handsontable .htUISelectionControls {
+  text-align: right;
+}
+
+.handsontable .htCheckboxRendererInput {
+  margin: 0 5px 0 0;
+  vertical-align: middle;
+  height: 1em;
+}
+
+/* UI elements */
+/* Input */
+.handsontable .htUIInput {
+  padding: 3px 0 7px 0;
+  position: relative;
+  text-align: center;
+}
+.handsontable .htUIInput input {
+  border-radius: 2px;
+  border: 1px solid #d2d1d1;
+}
+.handsontable .htUIInput input:focus {
+  outline: 0;
+}
+.handsontable .htUIInputIcon {
+  position: absolute;
+}
+
+/* Button */
+.handsontable .htUIInput.htUIButton {
+  cursor: pointer;
+  display: inline-block;
+}
+.handsontable .htUIInput.htUIButton input {
+  background-color: #eee;
+  color: #000;
+  cursor: pointer;
+  font-family: arial, sans-serif;
+  font-size: 11px;
+  font-weight: bold;
+  height: 19px;
+  min-width: 64px;
+}
+.handsontable .htUIInput.htUIButton input:hover {
+  border-color: #b9b9b9;
+}
+
+.handsontable .htUIInput.htUIButtonOK {
+  margin-right: 10px;
+}
+
+.handsontable .htUIInput.htUIButtonOK input {
+  background-color: #0f9d58;
+  border-color: #18804e;
+  color: #fff;
+}
+.handsontable .htUIInput.htUIButtonOK input:hover {
+  border-color: #1a6f46;
+}
+
+/* Select */
+.handsontable .htUISelect {
+  cursor: pointer;
+  margin-bottom: 7px;
+  position: relative;
+}
+.handsontable .htUISelectCaption {
+  background-color: #e8e8e8;
+  border-radius: 2px;
+  border: 1px solid #d2d1d1;
+  font-family: arial, sans-serif;
+  font-size: 11px;
+  font-weight: bold;
+  padding: 3px 20px 3px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.handsontable .htUISelectCaption:hover {
+  background-color: #e8e8e8;
+  border: 1px solid #b9b9b9;
+}
+.handsontable .htUISelectDropdown:after {
+  content: "\25B2";
+  font-size: 7px;
+  position: absolute;
+  right: 10px;
+  top: 0;
+}
+.handsontable .htUISelectDropdown:before {
+  content: "\25BC";
+  font-size: 7px;
+  position: absolute;
+  right: 10px;
+  top: 8px;
+}
+
+/* SelectMultiple */
+.handsontable .htUIMultipleSelect .handsontable .htCore {
+  border: none;
+}
+.handsontable .htUIMultipleSelect .handsontable .htCore td:hover {
+  background-color: #f5f5f5;
+}
+
+.handsontable .htUIMultipleSelectSearch input {
+  border-radius: 2px;
+  border: 1px solid #d2d1d1;
+  padding: 3px;
+}
+
+.handsontable .htUIRadio {
+  display: inline-block;
+  margin-right: 5px;
+  height: 100%;
+}
+
+.handsontable .htUIRadio:last-child {
+  margin-right: 0;
+}
+
+.handsontable .htUIRadio > input[type="radio"] {
+  margin-right: 0.5ex;
+}
+
+.handsontable .htFiltersMenuOperators {
+  padding-bottom: 5px;
+}
+
+.handsontable.ganttChart tr:first-child th div.relative {
+  padding-right: 21px;
+}
+.handsontable.ganttChart .colHeader {
+  display: block;
+}
+.handsontable.ganttChart td.rangeBar {
+  background: #48b703;
+  border-right-width: 0;
+  position: relative;
+  -webkit-box-shadow: inset 0 3px 0 #ffffff;
+  -moz-box-shadow: inset 0 3px 0 #ffffff;
+  box-shadow: inset 0 3px 0 #ffffff;
+}
+.handsontable.ganttChart td.rangeBar.last {
+  border-right-width: 1px;
+}
+.handsontable.ganttChart td.rangeBar.area {
+  background: #7ec481;
+}
+.handsontable.ganttChart td.rangeBar.partial {
+  background: #8edf5a;
+}
+.handsontable.ganttChart td.rangeBar.area.partial {
+  background: #a1d8ad;
+}
+
+.handsontable thead th.hiddenHeader:not(:first-of-type) {
+  display: none;
+}
+
+.handsontable th.ht_nestingLevels {
+  text-align: left;
+  padding-left: 7px;
+}
+
+.handsontable th div.ht_nestingLevels {
+  display: inline-block;
+  position: absolute;
+  left: 11px;
+}
+
+.handsontable.innerBorderLeft th div.ht_nestingLevels,
+.handsontable.innerBorderLeft ~ .handsontable th div.ht_nestingLevels {
+  right: 10px;
+}
+
+.handsontable th span.ht_nestingLevel {
+  display: inline-block;
+}
+
+.handsontable th span.ht_nestingLevel_empty {
+  display: inline-block;
+  width: 10px;
+  height: 1px;
+  float: left;
+}
+
+.handsontable th span.ht_nestingLevel::after {
+  content: "\2510";
+  font-size: 9px;
+  display: inline-block;
+  position: relative;
+  bottom: 3px;
+}
+
+.handsontable th div.ht_nestingButton {
+  display: inline-block;
+  position: absolute;
+  right: -2px;
+  cursor: pointer;
+}
+
+.handsontable th div.ht_nestingButton.ht_nestingExpand::after {
+  content: "\002B";
+}
+
+.handsontable th div.ht_nestingButton.ht_nestingCollapse::after {
+  content: "\002D";
+}
+
+.handsontable.innerBorderLeft th div.ht_nestingButton,
+.handsontable.innerBorderLeft ~ .handsontable th div.ht_nestingButton {
+  right: 0;
+}
+/*
+ * Handsontable HiddenColumns
+ */
+.handsontable th.beforeHiddenColumn {
+  position: relative;
+}
+
+.handsontable th.beforeHiddenColumn::after,
+.handsontable th.afterHiddenColumn::before {
+  color: #bbb;
+  position: absolute;
+  top: 50%;
+  font-size: 5pt;
+  transform: translateY(-50%);
+}
+
+.handsontable th.afterHiddenColumn {
+  position: relative;
+}
+.handsontable th.beforeHiddenColumn::after {
+  right: 1px;
+  content: "\25C0";
+}
+.handsontable th.afterHiddenColumn::before {
+  left: 1px;
+  content: "\25B6";
+}
+
+.handsontable td.firstVisibleColumn,
+.handsontable th.firstVisibleColumn {
+  border-left: 1px solid #ccc;
+}
+
+/*!
+ * Handsontable HiddenRows
+ */
+.handsontable th.beforeHiddenRow::before,
+.handsontable th.afterHiddenRow::after {
+  color: #bbb;
+  font-size: 6pt;
+  line-height: 6pt;
+  position: absolute;
+  left: 2px;
+}
+
+.handsontable th.beforeHiddenRow,
+.handsontable th.afterHiddenRow {
+  position: relative;
+}
+
+.handsontable th.beforeHiddenRow::before {
+  content: "\25B2";
+  bottom: 2px;
+}
+
+.handsontable th.afterHiddenRow::after {
+  content: "\25BC";
+  top: 2px;
+}
+.handsontable.ht__selection--rows tbody th.beforeHiddenRow.ht__highlight:before,
+.handsontable.ht__selection--rows tbody th.afterHiddenRow.ht__highlight:after {
+  color: #eee;
+}
+.handsontable td.afterHiddenRow.firstVisibleRow,
+.handsontable th.afterHiddenRow.firstVisibleRow {
+  border-top: 1px solid #ccc;
+}
+</style>
