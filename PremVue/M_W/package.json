@@ -33,7 +33,7 @@
     "@fortawesome/free-solid-svg-icons": "^5.9.0",
     "@fortawesome/vue-fontawesome": "^0.1.6",
     "@handsontable/vue": "^4.0.0",
-    "axios": "0.18.0",
+    "axios": "0.18.1",
     "clipboard": "1.7.1",
     "codemirror": "5.39.2",
     "connect": "3.6.6",
