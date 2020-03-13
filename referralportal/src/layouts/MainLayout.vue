@@ -64,7 +64,7 @@
       @reset="onReset"
       class="q-gutter-md"
     >
-      <q-input
+      <!-- <q-input
       :dense=field.denseSw
       v-for="field in fields"
       :key=field.key
@@ -75,12 +75,22 @@
       :placeholder=field.placeholder
       :type=field.type
       >
-      </q-input>
+      </q-input> -->
        <!-- <div v-for='(x,key) in formdata' :key=key>
 
          data = {{x}}
          idx = {{key}}
   </div> -->
+  <div v-for="form in forms" :key=form.key>
+
+{{form[0].name}}  </div>
+  <ADSForm v-for="form in forms" :key=form.key title="LIST OF FORMS" :fields='form'>
+ </ADSForm>
+
+  <!-- <ADSForm :title='xTitle' :fields='fieldsXX'></ADSForm>
+  <ADSForm></ADSForm>
+    <ADSForm :title='xTitle' :fields='fieldsXX'></ADSForm>
+    <ADSForm :title='xTitle' :fields='fields'></ADSForm> -->
        <div>
         <q-btn label="Submit" type="submit" color="primary"/>
         <q-btn label="Reset" type="reset" color="primary" flat class="q-ml-sm" />
@@ -96,16 +106,19 @@
 </template>
 <script>
 import EssentialLink from 'components/EssentialLink'
+import ADSForm from 'components/ADSForm'
 
 export default {
   name: 'MainLayout',
 
   components: {
-    EssentialLink
+    EssentialLink,
+    ADSForm
   },
 
   data () {
     return {
+      xTitle: { 'a': 'aa', 'b': 'bb' },
       leftDrawerOpen: false,
       denseSw: true,
       firstname: null,
@@ -113,7 +126,31 @@ export default {
       modality: null,
       formdata: {},
       temp: {},
-      exportData: { formName: 'REFPORTAL' },
+      exportData: { view: 'REFPORTAL' },
+      fieldsXX: [
+        {
+          label: 'First',
+          data: 'data[1]',
+          filledSw: true,
+          key: 'first',
+          color: 'brown',
+          denseSw: false,
+          placeholder: 'place1xxxxx',
+          type: 'text'
+        },
+        {
+          label: 'Second',
+          data: 'data[2]',
+          filledSw: false,
+          key: 'second',
+          color: 'black',
+          densSw: false,
+          placeholder: 'places2yyyyy',
+          type: 'text'
+        }
+      ],
+      forms: [],
+      formdetails: [],
       fields: [
         // {
         //   label: 'First',
@@ -193,7 +230,12 @@ export default {
       const data = await this.$M('getForm^TKAAforms', this.exportData)
 
       console.log('Call getForm^TKAAforms:', data)
-      this.fields = { ...data.data.result.FORMS.REFPORTAL.FIELDS }
+      this.fields = { ...data.data.result.FORMS.FIRSTFORM }
+      this.forms = { ...data.data.result.FORMS }
+      this.formdetails = { ...data.data.result.FORMDETAILS }
+      console.log('data.results', data.data.result)
+      console.log('Forms', this.forms)
+      console.log('FormDetails', this.formdetails)
       // this.temp = data.result.dashboards
 
       // this.NumberOfCharts = data.result.count
@@ -211,9 +253,10 @@ export default {
     },
     async onSubmit () {
       alert('submit called')
-      var json = JSON.stringify(this.formdata)
-      const data = await this.$M('saveForm^TKAAforms', json)
+      // var json = JSON.stringify(this.formdata)
+      const data = await this.$M('saveForm^TKAAforms', this.formdata)
       alert(data)
+      this.fieldsXX[0].label = 'New label name'
     },
     onReset () {
       alert('Reset called')
